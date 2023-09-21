@@ -1,0 +1,178 @@
+ARG BASE_IMAGE=nvcr.io/nvidia/l4t-base:r32.3.1
+
+FROM ${BASE_IMAGE} as base
+
+ENV OS=ubuntu1804
+ENV ARCH=arm64
+ARG SOC="t194"
+# Cambiamos el repositorio de nvidia 32.6 de este container, 
+# por el 32.5 para hacer un downgrade de tensorRT y cudnn
+ARG JETPACK_VERSION="r32"
+
+ARG OPENCV_VERSION="4.5.2"
+ARG OPENCV_DO_TEST="FALSE"
+ARG DEBIAN_FRONTEND=noninteractive
+
+
+#8.2.4.15 #8.2.1.32
+ENV NV_CUDNN_VERSION 7.6.3.28
+ENV NV_CUDNN_PACKAGE_NAME libcudnn7
+ENV NV_CUDNN_PACKAGE ${NV_CUDNN_PACKAGE_NAME}=${NV_CUDNN_VERSION}-1+cuda10.0
+ENV NV_CUDNN_PACKAGE_DEV ${NV_CUDNN_PACKAGE_NAME}-dev=${NV_CUDNN_VERSION}-1+cuda10.0
+
+ENV TRT_VERSION="6.0.1-1+cuda10.0"
+
+
+# RUN wget https://developer.download.nvidia.com/compute/cuda/repos/${OS}/${ARCH}/cuda-${OS}.pin && \
+#     apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/${OS}/${ARCH}/7fa2af80.pub && \
+#     echo "deb https://developer.download.nvidia.com/compute/cuda/repos/${OS}/${ARCH}/ /" > /etc/apt/sources.list.d/nvidia-l4t-apt-source.list
+
+# Adding Nvidia repositories
+ADD --chown=root:root https://repo.download.nvidia.com/jetson/jetson-ota-public.asc /etc/apt/trusted.gpg.d/jetson-ota-public.asc
+RUN chmod 644 /etc/apt/trusted.gpg.d/jetson-ota-public.asc \
+   && apt-get update && apt-get install -y --no-install-recommends \
+       ca-certificates 
+RUN echo "deb https://repo.download.nvidia.com/jetson/common ${JETPACK_VERSION} main" > /etc/apt/sources.list.d/nvidia-l4t-apt-source.list \
+   && echo "deb https://repo.download.nvidia.com/jetson/${SOC} ${JETPACK_VERSION} main" >> /etc/apt/sources.list.d/nvidia-l4t-apt-source.list \
+  && cat /etc/apt/sources.list.d/nvidia-l4t-apt-source.list \
+  && apt update
+RUN apt update -y && apt upgrade -y
+
+
+
+# Install cuDNN
+#cuDNN dev necessary for compiling opencv and tkdnn
+RUN apt install -y --no-install-recommends \
+    ${NV_CUDNN_PACKAGE} \
+    ${NV_CUDNN_PACKAGE_DEV} && \
+    apt-mark hold ${NV_CUDNN_PACKAGE_NAME} 
+#Install Tensor-RT 
+# tensorRT-dev necessary for compiling tkdnn
+RUN apt install -y  cuda-toolkit-10-0 \
+		    libnvinfer6 \
+                    libnvonnxparsers6 \
+                    libnvparsers6 \
+                    libnvonnxparsers-dev \
+                    libnvparsers-dev \
+                    libnvinfer-plugin6 \
+                    libnvinfer-plugin-dev \
+                    libnvinfer-dev python-libnvinfer \
+                    python3-libnvinfer 
+RUN apt-mark hold cuda-toolkit-10-0 libnvinfer6 libnvonnxparsers6 libnvparsers6 libnvinfer-plugin6 libnvinfer-dev libnvonnxparsers-dev libnvparsers-dev libnvinfer-plugin-dev python-libnvinfer python3-libnvinfer
+
+
+# Update cmake for tkdnn compiling
+RUN apt install gpg wget -y && \
+    wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null && \
+    echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ bionic main' | tee /etc/apt/sources.list.d/kitware.list >/dev/null && \
+    apt update -y && rm /usr/share/keyrings/kitware-archive-keyring.gpg && \  
+    apt install kitware-archive-keyring  -y && \
+    apt update -y && apt install cmake -y && cmake --version
+
+
+# Install OPENCV
+
+# Updating python to 3.8. This is optional, 
+# but not possible nowadays with python3-libnvinfer dependencies (>3.6 & <3.7)
+# RUN apt remove --purge python3.6 -y && apt autoremove -y && apt install python3.8 -y 
+# RUN rm -f /usr/bin/python3 && ln -s /usr/bin/python3.8 /usr/bin/python3
+# RUN rm -f /usr/bin/python && ln -s /usr/bin/python3 /usr/bin/python
+
+# Required opencv compiling dependencies
+RUN echo "Installing build dependencies." && \
+    apt update && \
+    apt dist-upgrade -y --autoremove && \
+    apt install -y \
+	build-essential \
+	unzip \
+	pkg-config \
+	libjpeg-dev \
+	libpng-dev \
+	libtiff-dev \
+	libavcodec-dev \
+	libavformat-dev \
+	libswscale-dev \
+	libv4l-dev \
+	libxvidcore-dev \
+	libx264-dev \	
+	libgtk-3-dev \
+	libatlas-base-dev \
+	gfortran \
+	python3-dev \
+   libgstreamer1.0-dev \
+   libgstreamer-plugins-base1.0-dev \
+   libdc1394-22-dev \
+   libavresample-dev \
+   libgstreamer1.0-dev \
+   libgstreamer-plugins-base1.0-dev 
+RUN apt install libeigen3-dev python3-numpy -y && python --version
+
+RUN mkdir -p /tmp/install_cv2 && \
+    cd /tmp/install_cv2 && \
+    apt install git -y && \
+    git clone --branch ${OPENCV_VERSION} --depth 1 https://github.com/opencv/opencv.git && \
+    git clone --branch ${OPENCV_VERSION} --depth 1 https://github.com/opencv/opencv_contrib.git
+
+
+RUN cd /tmp/install_cv2/opencv && mkdir build && cd build && \
+    cmake -D CMAKE_BUILD_TYPE=RELEASE \
+        -D CMAKE_LIBRARY_PATH=/usr/local/cuda/lib64/stubs \
+        -D BUILD_EXAMPLES=OFF \
+        -D BUILD_opencv_python3=ON \
+	     -D BUILD_opencv_python2=OFF \
+        -D BUILD_opencv_java=OFF \
+        -D PYTHON_EXECUTABLE='/usr/bin/python3' \
+        -D CMAKE_BUILD_TYPE=RELEASE \
+        -D CMAKE_INSTALL_PREFIX=/usr/local/ \
+        -D CUDA_ARCH_BIN=7.2 \
+        -D CUDA_ARCH_PTX= \
+        -D CUDA_FAST_MATH=ON \
+        -D EIGEN_INCLUDE_PATH=/usr/include/eigen3 \
+        -D ENABLE_NEON=ON \
+        -D OPENCV_ENABLE_NONFREE=ON \
+        -D OPENCV_EXTRA_MODULES_PATH=/tmp/install_cv2/opencv_contrib/modules \
+        -D OPENCV_GENERATE_PKGCONFIG=ON \
+        -D WITH_CUBLAS=ON \
+        -D WITH_CUDA=ON \
+        -D WITH_CUDNN=ON \
+        -D OPENCV_DNN_CUDA=ON \
+        -D WITH_GSTREAMER=ON \
+        -D WITH_LIBV4L=ON \
+	     -D WITH_NVCUVID=ON \
+        ../
+#         #-D CUDNN_LIBRARY=/usr/local/cuda/lib64/libcudnn_static_v8.a \
+#         #-D CUDNN_INCLUDE_DIR=/usr/local/cuda/include \
+#         #-D CUDNN_VERSION=${NV_CUDNN_VERSION} \
+RUN cd /tmp/install_cv2/opencv/build && make -j3 VERBOSE=1
+RUN cd /tmp/install_cv2/opencv/build && make install
+RUN cd /tmp/install_cv2/opencv/build && ldconfig
+RUN rm -rf /tmp/install_cv2 -rf
+
+#RUN mkdir /usr/lib/aarch64-linux-gnu/tegra
+COPY libnvmedia.so /usr/lib/aarch64-linux-gnu/tegra/  
+COPY libnvdla_compiler.so /usr/lib/aarch64-linux-gnu/tegra/
+COPY libnvrm_graphics.so /usr/lib/aarch64-linux-gnu/tegra/
+COPY libnvdc.so /usr/lib/aarch64-linux-gnu/tegra/
+COPY libnvtvmr.so /usr/lib/aarch64-linux-gnu/tegra/
+COPY libnvos.so /usr/lib/aarch64-linux-gnu/tegra/
+COPY libnvparser.so /usr/lib/aarch64-linux-gnu/tegra/
+COPY libnvrm.so /usr/lib/aarch64-linux-gnu/tegra/
+COPY libnvimp.so /usr/lib/aarch64-linux-gnu/tegra/
+
+# Set environment and working directory
+# ENV TRT_LIBPATH=/usr/lib/aarch64-linux-gnu/
+# ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${TRT_LIBPATH}"
+
+# Install tkDNN
+RUN apt install libeigen3-dev libyaml-cpp-dev cuda-nvrtc-10-0 -y
+ENV LD_LIBRARY_PATH=/usr/local/cuda-10.0/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+RUN echo $LD_LIBRARY_PATH
+RUN mkdir /tmp/install_tkdnn && cd /tmp/install_tkdnn && \
+    git clone --depth 1 --branch v0.5 https://github.com/ceccocats/tkDNN && \
+    cd tkDNN  && mkdir build  && cd build  && \
+    cmake .. && \ 
+    # CUDA_VERBOSE_BUILD
+    #cmake -D CUDA_cublas_LIBRARY=/usr/local/cuda-10.0/targets/aarch64-linux/lib/libcublas.so.10 .. && \
+   #  #       -D CUDA_nvinfer_LIBRARY.. && \ 
+    make
+
