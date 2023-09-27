@@ -58,6 +58,7 @@ RUN apt install -y  cuda-toolkit-10-0 \
                     libnvinfer-plugin-dev \
                     libnvinfer-dev python-libnvinfer \
                     python3-libnvinfer 
+
 RUN apt-mark hold cuda-toolkit-10-0 libnvinfer6 libnvonnxparsers6 libnvparsers6 libnvinfer-plugin6 libnvinfer-dev libnvonnxparsers-dev libnvparsers-dev libnvinfer-plugin-dev python-libnvinfer python3-libnvinfer
 
 
@@ -68,7 +69,6 @@ RUN apt install gpg wget -y && \
     apt update -y && rm /usr/share/keyrings/kitware-archive-keyring.gpg && \  
     apt install kitware-archive-keyring  -y && \
     apt update -y && apt install cmake -y && cmake --version
-
 
 # Install OPENCV
 
@@ -104,7 +104,7 @@ RUN echo "Installing build dependencies." && \
    libdc1394-22-dev \
    libavresample-dev \
    libgstreamer1.0-dev \
-   libgstreamer-plugins-base1.0-dev 
+   libgstreamer-plugins-base1.0-dev
 RUN apt install libeigen3-dev python3-numpy -y && python --version
 
 RUN mkdir -p /tmp/install_cv2 && \
@@ -113,8 +113,8 @@ RUN mkdir -p /tmp/install_cv2 && \
     git clone --branch ${OPENCV_VERSION} --depth 1 https://github.com/opencv/opencv.git && \
     git clone --branch ${OPENCV_VERSION} --depth 1 https://github.com/opencv/opencv_contrib.git
 
-
-RUN cd /tmp/install_cv2/opencv && mkdir build && cd build && \
+RUN mkdir -p /tmp/install_cv2/build
+RUN cd /tmp/install_cv2/build && \
     cmake -D CMAKE_BUILD_TYPE=RELEASE \
         -D CMAKE_LIBRARY_PATH=/usr/local/cuda/lib64/stubs \
         -D BUILD_EXAMPLES=OFF \
@@ -139,13 +139,13 @@ RUN cd /tmp/install_cv2/opencv && mkdir build && cd build && \
         -D WITH_GSTREAMER=ON \
         -D WITH_LIBV4L=ON \
 	     -D WITH_NVCUVID=ON \
-        ../
+        ../opencv
 #         #-D CUDNN_LIBRARY=/usr/local/cuda/lib64/libcudnn_static_v8.a \
 #         #-D CUDNN_INCLUDE_DIR=/usr/local/cuda/include \
 #         #-D CUDNN_VERSION=${NV_CUDNN_VERSION} \
-RUN cd /tmp/install_cv2/opencv/build && make -j3 VERBOSE=1
-RUN cd /tmp/install_cv2/opencv/build && make install
-RUN cd /tmp/install_cv2/opencv/build && ldconfig
+RUN cd /tmp/install_cv2/build && make -j6 VERBOSE=1
+RUN cd /tmp/install_cv2/build && make install
+RUN cd /tmp/install_cv2/build && ldconfig
 RUN rm -rf /tmp/install_cv2 -rf
 
 #RUN mkdir /usr/lib/aarch64-linux-gnu/tegra
@@ -176,3 +176,42 @@ RUN mkdir /tmp/install_tkdnn && cd /tmp/install_tkdnn && \
    #  #       -D CUDA_nvinfer_LIBRARY.. && \ 
     make
 
+RUN apt update
+RUN apt install cmake libgtk-3-dev libjpeg-dev libgles2-mesa-dev libgstreamer1.0-dev v4l-utils -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+#RUN apt install nvidia-l4t-jetson-multimedia-api -y
+COPY JXAV_R32.3.1.tgz Multimedia_JXAV_R32.3.1.tgz
+COPY libnvargus.so /usr/lib/aarch64-linux-gnu/tegra/
+COPY packages/usr /usr
+RUN tar zxvf Multimedia_JXAV_R32.3.1.tgz && rm Multimedia_JXAV_R32.3.1.tgz && cd jetson_multimedia_api/argus/cmake && cmake .. && make && make install
+
+RUN mkdir /tmp/libjpeg-turbo && cd /tmp/libjpeg-turbo && \
+git clone https://github.com/libjpeg-turbo/libjpeg-turbo.git && \
+cd libjpeg-turbo && mkdir build && cd build && \
+cmake .. && \
+make && \
+make install
+RUN rm -rf /tmp/libjpeg-turbo -rf
+
+
+RUN mkdir /tmp/prom && cd /tmp/prom && \
+git clone https://github.com/jupp0r/prometheus-cpp.git && \
+cd prometheus-cpp &&  \
+git submodule init && \
+git submodule update && \
+mkdir _build && cd _build && \
+cmake .. -DBUILD_SHARED_LIBS=ON -DENABLE_PUSH=ON -DENABLE_COMPRESSION=OFF && \
+cmake --build . --parallel 4 && \
+ctest -V && \
+cmake --install .
+RUN rm -rf /tmp/prom -rf
+
+RUN mkdir /tmp/libzmq && cd /tmp/libzmq && \
+git clone https://github.com/zeromq/libzmq.git && \
+cd libzmq && \
+./autogen.sh && \
+./configure && \
+make -j4 && \
+make install
+RUN rm -rf /tmp/libzmq -rf
+
+RUN apt clean
